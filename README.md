@@ -74,20 +74,21 @@ The program will walk you through:
 9. **Save** — choose which files to save and where
 
 ---
-
 ## Project Structure
 
 ```bash
 xfoil-interface/
-├── main.py               # Entry point, user interaction flow, save logic
-├── xfoil_interface.py    # XFOIL process management and communication
-├── plotting.py           # All matplotlib plot generation
-├── airfoil_geometry.py   # Airfoil coordinate reading and geometry plotting
-├── utils.py              # Input getters, data parsing, file handling helpers
+├── XFOIL_Interface/
+│   ├── main.py
+│   ├── xfoil_interface.py
+│   ├── plotting.py
+│   ├── airfoil_geometry.py
+│   ├── utils.py
 ├── requirements.txt
-└── README.md
+├── README.md
+├── LICENSE
+└── .gitignore
 ```
-
 ---
 
 ## Known Limitations
