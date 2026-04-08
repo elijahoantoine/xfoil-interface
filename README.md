@@ -37,14 +37,15 @@ pip install -r requirements.txt
 
 ## Installation
 
+## Installation
+
 1. Clone the repository:
 
-> ⚠️ Replace `yourusername` with your GitHub username if you fork this repo.
-
 ```bash
-git clone https://github.com/yourusername/xfoil-interface.git
+git clone https://github.com/elijahoantoine/xfoil-interface.git
 cd xfoil-interface
 ```
+⚠️ If you fork this repository, replace elijahoantoine with your username.
 
 2. Install dependencies:
 ```bash
@@ -58,7 +59,7 @@ pip install -r requirements.txt
 ## Usage
 
 ```bash
-python main.py
+python XFOIL_Interface/main.py
 ```
 
 The program will walk you through:
