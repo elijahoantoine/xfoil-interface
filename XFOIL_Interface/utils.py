@@ -340,6 +340,117 @@ def load_experimental_data():
 
     return exp_data_lift if exp_data_lift else None, exp_data_drag if exp_data_drag else None
 
+def load_cp_experimental_data():
+    '''Load experimental Cp vs x/c data files for overlay on Cp distribution plots.
+    Multiple datasets can be loaded, each with its own label.
+    Cp data tends to be dense, so use small markers when plotting to avoid
+    obscuring the computed Cp curves.
+
+    Returns: A dictionary keyed by dataset label with (cp_x, cp_values) tuples,
+             or None if no data is loaded.'''
+
+    exp_data = {}
+
+    while True:
+        print("\nLoad experimental Cp data file (or press Enter to skip):")
+        root.lift()
+        root.attributes('-topmost', True)
+        filepath = filedialog.askopenfilename(
+            title="Select experimental Cp data file",
+            filetypes=[("Data files", "*.dat *.txt *.csv"), ("All files", "*.*")]
+        )
+        root.attributes('-topmost', False)
+
+        if not filepath:
+            break
+
+        try:
+            with open(filepath, 'r') as f:
+                lines = f.readlines()
+        except FileNotFoundError:
+            print("File not found. Try again.")
+            continue
+
+        print("\nFirst 10 lines of file:")
+        for i, line in enumerate(lines[:10]):
+            print(f"  {i+1}: {line.rstrip()}")
+
+        while True:
+            try:
+                start_row = int(input("Which row does data start on? (1-indexed): ").strip())
+                if start_row < 1:
+                    print("Must be at least 1.")
+                    continue
+                break
+            except ValueError:
+                print("Invalid input. Enter a number.")
+
+        delim_input = input("Delimiter — (1) space/whitespace  (2) comma  (3) tab [default 1]: ").strip()
+        if delim_input == "2":
+            delimiter = ","
+        elif delim_input == "3":
+            delimiter = "\t"
+        else:
+            delimiter = None
+
+        data_rows = []
+        for line in lines[start_row - 1:]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                if delimiter:
+                    parts = [float(x.strip()) for x in line.split(delimiter)]
+                else:
+                    parts = [float(x) for x in line.split()]
+                data_rows.append(parts)
+            except ValueError:
+                continue
+
+        if not data_rows:
+            print("No numeric data found. Check your start row and delimiter.")
+            continue
+
+        n_cols = len(data_rows[0])
+        print(f"\nFound {n_cols} columns and {len(data_rows)} data rows.")
+        print("Column mapping (enter column number, 1-indexed):")
+
+        while True:
+            try:
+                xc_col = int(input("Which column is x/c? ").strip()) - 1
+                cp_col = int(input("Which column is Cp? ").strip()) - 1
+                break
+            except ValueError:
+                print("Invalid input. Enter column numbers.")
+
+        try:
+            xc_vals = [row[xc_col] for row in data_rows]
+            cp_vals = [row[cp_col] for row in data_rows]
+        except IndexError:
+            print("Column index out of range. Check your column numbers.")
+            continue
+
+        dataset_label = input("Enter a label for this dataset (e.g. 'Exp AoA=5°'): ").strip()
+        if dataset_label == "":
+            dataset_label = os.path.basename(filepath)
+
+        exp_data[dataset_label] = (xc_vals, cp_vals)
+        print(f"Loaded {len(xc_vals)} data points.")
+
+        while True:
+            more = input("Load another Cp data file? (y/n): ").strip().lower()
+            if more == "y":
+                break
+            elif more == "n":
+                break
+            else:
+                print("Please enter 'y' or 'n'.")
+        if more == "n":
+            break
+
+    return exp_data if exp_data else None
+
+
 def get_airfoil_input():
     '''Prompt the user to enter an airfoil name (NACA 4 or 5 digit), a path to a .dat file, or browse for a file.
     Validates input and returns a command string to load the airfoil in XFOIL.

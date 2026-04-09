@@ -7,7 +7,8 @@ from xfoil_interface import run_xfoil_study, restart_xfoil, init_xfoil
 from utils import (get_airfoil_input, get_flow_type, get_reynolds_number, parse_pacc_all,
                    get_mach_number, get_moment_center, get_aoa_range,
                    get_max_iterations, write_filtered_pacc,
-                   append_pacc, display_results, load_experimental_data, root)
+                   append_pacc, display_results, load_experimental_data,
+                   load_cp_experimental_data, root)
 from airfoil_geometry import read_airfoil_coords
 from plotting import (plot_liftvsAoA, plot_dragpolar, plot_Cp_distribution,
                       plot_liftvsAoA_multi, plot_dragpolar_multi, plot_Cp_multi,
@@ -398,49 +399,90 @@ if __name__ == "__main__":
                     choice = input("Save Cp distribution plots? (y/n): ").strip().lower()
                     if choice == "y":
                         if save_dir:
+                            # ask for experimental Cp data once before selecting AoAs — same
+                            # dataset gets overlaid on every plot saved in this batch
+                            while True:
+                                exp_choice = input("Overlay experimental Cp data on these plots? (y/n): ").strip().lower()
+                                if exp_choice == "y":
+                                    cp_exp_data = load_cp_experimental_data()
+                                    break
+                                elif exp_choice == "n":
+                                    cp_exp_data = None
+                                    break
+                                else:
+                                    print("Please enter 'y' or 'n'.")
+
                             saved = False
                             while True:
                                 chooseplot = input("Save (1) all  (2) enter specific AoAs  (3) select from list  (4) Back: ").strip()
+
+                                # build a flat list of (reynolds, aoa) pairs to save based on user choice,
+                                # then handle the actual save in one shared block below
+                                pairs_to_save = []
                                 if chooseplot == "1":
                                     for reynolds in re_list:
-                                        re_str = f"{reynolds:.2e}" if reynolds is not None else "inviscid"
-                                        for aoa, fig in cp_figs[reynolds].items():
-                                            fig.savefig(os.path.join(save_dir, f"{airfoil_label}_Re_{re_str}_Cp_{aoa}.png"), dpi=300, bbox_inches='tight')
-                                    saved = True
-                                    break
-                                elif chooseplot == "2":
+                                        for aoa in all_cpwr_paths[reynolds]:
+                                            pairs_to_save.append((reynolds, aoa))
+                                elif chooseplot in ("2", "3"):
+                                    if chooseplot == "3":
+                                        for reynolds in re_list:
+                                            re_str = f"{reynolds:.2e}" if reynolds is not None else "inviscid"
+                                            print(f"\nRe = {re_str}:")
+                                            for aoa in cp_figs[reynolds].keys():
+                                                print(f"  {aoa}°")
                                     aoa_input = input("Enter AoAs to save (comma separated): ").strip()
                                     aoas_to_save = [round(float(a.strip()), 2) for a in aoa_input.split(",")]
                                     for reynolds in re_list:
                                         re_str = f"{reynolds:.2e}" if reynolds is not None else "inviscid"
                                         for aoa in aoas_to_save:
-                                            if aoa in cp_figs[reynolds]:
-                                                cp_figs[reynolds][aoa].savefig(os.path.join(save_dir, f"{airfoil_label}_Re_{re_str}_Cp_{aoa}.png"), dpi=300, bbox_inches='tight')
+                                            if aoa in all_cpwr_paths[reynolds]:
+                                                pairs_to_save.append((reynolds, aoa))
                                             else:
-                                                print(f"No Cp plot for Re={re_str} AoA={aoa}.")
-                                    saved = True
-                                    break
-                                elif chooseplot == "3":
-                                    for reynolds in re_list:
-                                        re_str = f"{reynolds:.2e}" if reynolds is not None else "inviscid"
-                                        print(f"\nRe = {re_str}:")
-                                        for aoa in cp_figs[reynolds].keys():
-                                            print(f"  {aoa}°")
-                                    aoa_input = input("Enter AoAs to save (comma separated): ").strip()
-                                    aoas_to_save = [round(float(a.strip()), 2) for a in aoa_input.split(",")]
-                                    for reynolds in re_list:
-                                        re_str = f"{reynolds:.2e}" if reynolds is not None else "inviscid"
-                                        for aoa in aoas_to_save:
-                                            if aoa in cp_figs[reynolds]:
-                                                cp_figs[reynolds][aoa].savefig(os.path.join(save_dir, f"{airfoil_label}_Re_{re_str}_Cp_{aoa}.png"), dpi=300, bbox_inches='tight')
-                                            else:
-                                                print(f"No Cp plot for Re={re_str} AoA={aoa}.")
-                                    saved = True
-                                    break
+                                                print(f"No Cp data for Re={re_str} AoA={aoa}.")
                                 elif chooseplot == "4":
                                     break
                                 else:
                                     print("Invalid selection. Please enter 1, 2, 3 or 4.")
+                                    continue
+
+                                # save each plot — if experimental data was loaded, re-read the
+                                # cpwr file and regenerate with the overlay. otherwise use the
+                                # pre-generated figure directly.
+                                for reynolds, aoa in pairs_to_save:
+                                    re_str = f"{reynolds:.2e}" if reynolds is not None else "inviscid"
+                                    if cp_exp_data:
+                                        path = all_cpwr_paths[reynolds].get(aoa)
+                                        data = all_results[reynolds].get(aoa)
+                                        if not path or not data:
+                                            continue
+                                        cp_x_i, cp_vals_i = [], []
+                                        try:
+                                            with open(path, 'r') as f:
+                                                for line in f:
+                                                    parts = line.strip().split()
+                                                    if len(parts) >= 3:
+                                                        try:
+                                                            cp_x_i.append(float(parts[0]))
+                                                            cp_vals_i.append(float(parts[2]))
+                                                        except ValueError:
+                                                            continue
+                                        except FileNotFoundError:
+                                            print(f"CPWR file not found for AoA {aoa}. Skipping.")
+                                            continue
+                                        fig = plot_Cp_distribution(
+                                            cp_x_i, cp_vals_i, (x_coords, y_coords), airfoil, aoa,
+                                            data.get('CL'), data.get('CD'), data.get('CM'), data.get('CDp'),
+                                            reynolds, experimental_data=cp_exp_data)
+                                        if fig:
+                                            fig.savefig(os.path.join(save_dir, f"{airfoil_label}_Re_{re_str}_Cp_{aoa}.png"), dpi=300, bbox_inches='tight')
+                                            plt.close(fig)
+                                    else:
+                                        if aoa in cp_figs[reynolds]:
+                                            cp_figs[reynolds][aoa].savefig(os.path.join(save_dir, f"{airfoil_label}_Re_{re_str}_Cp_{aoa}.png"), dpi=300, bbox_inches='tight')
+
+                                saved = True
+                                break
+
                             if saved:
                                 break
                         else:
@@ -486,7 +528,20 @@ if __name__ == "__main__":
                                     continue
                                 cp_data[aoa] = (cp_x, cp_values)
 
-                            multi_cp = plot_Cp_multi(cp_data, (x_coords, y_coords), airfoil, reynolds)
+                            # ask for experimental Cp data per Re — different Re studies
+                            # may have different experimental datasets
+                            while True:
+                                exp_choice = input("Overlay experimental Cp data on this plot? (y/n): ").strip().lower()
+                                if exp_choice == "y":
+                                    cp_exp_data = load_cp_experimental_data()
+                                    break
+                                elif exp_choice == "n":
+                                    cp_exp_data = None
+                                    break
+                                else:
+                                    print("Please enter 'y' or 'n'.")
+
+                            multi_cp = plot_Cp_multi(cp_data, (x_coords, y_coords), airfoil, reynolds, experimental_data=cp_exp_data)
 
                             if multi_cp is not None and save_dir:
                                 multi_cp.savefig(os.path.join(save_dir, f"{airfoil_label}_Re_{re_str}_multi_AoA_Cp.png"), dpi=300, bbox_inches='tight')

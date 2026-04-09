@@ -94,7 +94,7 @@ def plot_dragpolar(drag_coeffs, lift_coeffs, airfoil_name, reynolds=None, xlim=N
     plt.tight_layout()
     return fig
 
-def plot_Cp_distribution(cp_x, cp_values, airfoil_coords, airfoil_name, aoa, cl, cd, cm, cdp, reynolds=None):
+def plot_Cp_distribution(cp_x, cp_values, airfoil_coords, airfoil_name, aoa, cl, cd, cm, cdp, reynolds=None, experimental_data=None):
     '''Plots the Cp distribution along the airfoil surface for a given angle of attack, with annotations for CL, CD, CM, CDp, and Reynolds number.
     
     Arguments: - cp_x: list of x/c positions along the chord where Cp was computed
@@ -122,6 +122,7 @@ def plot_Cp_distribution(cp_x, cp_values, airfoil_coords, airfoil_name, aoa, cl,
 
     ax_cp.plot(cp_x, cp_values, 'b-', linewidth=1.5)
     ax_cp.invert_yaxis()
+    ax_cp.set_xlim(0, 1)
     ax_cp.set_xlabel(r'$x/c$')
     ax_cp.set_ylabel(r'$C_p$')
     re_str = f" - Re = {reynolds:.2e}" if reynolds is not None else ""
@@ -136,6 +137,12 @@ def plot_Cp_distribution(cp_x, cp_values, airfoil_coords, airfoil_name, aoa, cl,
     ax_cp.text(0.98, 0.98, info, transform=ax_cp.transAxes,
                fontsize=9, verticalalignment='top', horizontalalignment='right',
                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    if experimental_data is not None:
+        for label_exp, (exp_x, exp_cp) in experimental_data.items():
+            ax_cp.scatter(exp_x, exp_cp, marker='x', s=12, linewidths=0.7,
+                          label=f"Exp: {label_exp}", zorder=3)
+        ax_cp.legend()
 
     if airfoil_coords and len(airfoil_coords[0]) > 0:
         ax_af.plot(airfoil_coords[0], airfoil_coords[1], 'k-', linewidth=1.5)
@@ -261,9 +268,10 @@ def plot_Cp_multi(cp_data, airfoil_coords, airfoil_name, reynolds, experimental_
 
     if experimental_data is not None:
         for label_exp, (exp_x, exp_cp) in experimental_data.items():
-            ax_cp.scatter(exp_x, exp_cp, marker='x', s=50, label=f"Exp: {label_exp}")
+            ax_cp.scatter(exp_x, exp_cp, marker='x', s=12, linewidths=0.7, label=f"Exp: {label_exp}")
 
     ax_cp.invert_yaxis()
+    ax_cp.set_xlim(0, 1)
     ax_cp.set_xlabel(r'$x/c$')
     ax_cp.set_ylabel(r'$C_p$')
     ax_cp.set_title(f'$C_p$ Distribution: {label} — {re_str} — Multi-$\\alpha$')
