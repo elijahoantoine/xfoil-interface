@@ -72,17 +72,30 @@ if __name__ == "__main__":
             all_cpwr_paths[reynolds] = re_cpwr_paths
             all_filtered_pacc_paths[reynolds] = filtered_pacc_path
 
+            if exit_reason == "timeout":
+                re_str_disp = f"Re = {reynolds:.2e}" if reynolds is not None else "Inviscid"
+                print(f"\nXFOIL timed out or went numerically unstable on {re_str_disp} — partial results shown above.")
+                if i < len(re_list) - 1:
+                    print("Restarting XFOIL and continuing to next Re.")
+
             if exit_reason == "q":
                 break
             elif exit_reason == "n":
                 if i < len(re_list) - 1:
                     restart_xfoil()
                 continue
-            else:
+            else:  # "done" or "timeout" — restart XFOIL if more Re runs remain
                 if i < len(re_list) - 1:
                     restart_xfoil()
 
-        x_coords, y_coords = read_airfoil_coords(airfoil, coord_path) # read the airfoil coordinates from the saved file, so we can use them for plotting later. We have to read from the saved file because XFOIL may have modified the coordinates (e.g. reordering, resampling) and we want to make sure our plots match what XFOIL actually analyzed.
+        # read the airfoil coordinates from the saved file so plots match what XFOIL
+        # actually analyzed (XFOIL may have reordered or resampled the panels via PANE).
+        # if XFOIL timed out before saving, coord_path is None or the file doesn't exist —
+        # in that case we fall back to empty coords so Cp plots just skip the airfoil outline.
+        if airfoil.lower().startswith("naca") and (coord_path is None or not os.path.exists(coord_path)):
+            x_coords, y_coords = [], []
+        else:
+            x_coords, y_coords = read_airfoil_coords(airfoil, coord_path)
         airfoil_label = get_airfoil_label(airfoil) # get a nice label for the airfoil to use in plot titles and saved file names. This will extract the name from the file path and remove extensions, so "naca0012.dat" becomes "NACA 0012".
 
         # generate lift curve, drag polar, and Cp distribution plots for each Reynolds number, and store the figure objects in dictionaries keyed by Reynolds number so we can access them later for saving. If inviscid flow was selected, we will only have one set of results without a Reynolds number, and we will just use "inviscid" as the key in our dictionaries.

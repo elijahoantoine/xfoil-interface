@@ -9,6 +9,14 @@ from winpty import PtyProcess
 from utils import parse_pacc
 import tkinter.filedialog as filedialog
 
+
+class XFOILNaNError(RuntimeError):
+    '''Raised when XFOIL outputs consecutive NaN values — the solver has gone
+    numerically unstable and won't recover on its own. Caught in run_xfoil_study
+    to trigger partial-result recovery instead of waiting out the full timeout.'''
+    pass
+
+
 # xfoil_path and process start as None and get set by init_xfoil() at startup.
 # keeping them separate from module load means this file can be imported cleanly
 # without needing XFOIL present (useful for testing).
@@ -64,12 +72,27 @@ def read_until_prompt(prompts=("c>", 'Type "!" to continue', "VISCAL:  Convergen
 
     def _reader():
         '''Background daemon thread: reads chars from the PTY and puts the result
-        on result_queue when a prompt is found, or puts an error if reading fails.'''
+        on result_queue when a prompt is found, or puts an error if reading fails.
+        Also counts consecutive NaN lines — if XFOIL outputs 5 in a row it has
+        gone numerically unstable and won't come back, so we bail early rather
+        than burning the full timeout window.'''
         try:
             buf = ""
+            current_line = ""
+            consecutive_nan_lines = 0
             while True:
                 char = process.read(1)
                 buf += char
+                current_line += char
+                if char == '\n':
+                    if 'NaN' in current_line:
+                        consecutive_nan_lines += 1
+                        if consecutive_nan_lines >= 5:
+                            result_queue.put(('nan', buf))
+                            return
+                    else:
+                        consecutive_nan_lines = 0
+                    current_line = ""
                 if any(buf.endswith(p) for p in prompts):
                     result_queue.put(('ok', buf))
                     return
@@ -88,6 +111,12 @@ def read_until_prompt(prompts=("c>", 'Type "!" to continue', "VISCAL:  Convergen
             f"XFOIL did not produce a recognised prompt within {timeout}s. "
             "It may be waiting for unexpected input, have stalled, or have crashed. "
             "Consider increasing `timeout` for high-iteration runs."
+        )
+
+    if event == 'nan':
+        raise XFOILNaNError(
+            "XFOIL is outputting consecutive NaN values — numerical instability detected. "
+            "Partial results up to this point will be returned."
         )
 
     if event == 'error':
@@ -141,93 +170,113 @@ def run_xfoil_study(airfoil, flow_type, reynolds, mach, ncrit, aoa_range, max_it
     # pre-compute desired_aoas as plain floats once for all tolerance comparisons below
     desired_aoas_float = [float(a) for a in desired_aoas]
 
-    send_command(airfoil)
-    send_command("PANE")
-
     coord_path = os.path.join(tmpdir, "xy.dat")
-    send_command("SAVE")
-    send_command(coord_path.replace("\\", "/"))
+    coord_saved = False  # tracks whether XFOIL's SAVE command completed
 
-    send_command(f"XYCM {moment_center} 0")
-    send_command("OPER")
+    try:
+        send_command(airfoil)
+        send_command("PANE")
+        send_command("SAVE")
+        send_command(coord_path.replace("\\", "/"))
+        coord_saved = True
 
-    if flow_type == "visc":
-        send_command(f"VISC {reynolds}")
+        send_command(f"XYCM {moment_center} 0")
+        send_command("OPER")
 
-    if mach != 0:
-        send_command(f"MACH {mach}")
+        if flow_type == "visc":
+            send_command(f"VISC {reynolds}")
 
-    if flow_type == "visc":
-        send_command("VPAR")
-        send_command(f"N {ncrit}")
+        if mach != 0:
+            send_command(f"MACH {mach}")
+
+        if flow_type == "visc":
+            send_command("VPAR")
+            send_command(f"N {ncrit}")
+            send_command("")
+
+        send_command(f"ITER {max_iter}")
+
+        send_command("PACC")
+        send_command(pacc_path)
         send_command("")
 
-    send_command(f"ITER {max_iter}")
-
-    send_command("PACC")
-    send_command(pacc_path)
-    send_command("")
+    except (TimeoutError, XFOILNaNError) as e:
+        print(f"\nXFOIL stopped responding during setup: {e}")
+        print("No results available for this Re.")
+        return {}, coord_path if coord_saved else None, desired_aoas, "timeout"
 
     sweep_exit = ["done"]
-    while True: # loop through the AoA sweep, and if we encounter a convergence failure at a desired AoA point, we will pause and ask the user if they want to retry that point or skip it. If they choose to retry, we will attempt to run that AoA point again immediately. If they choose to skip, we will move on to the next AoA point in the sweep. This allows the user to have control over how to handle convergence issues without crashing the entire program.
-        try:
-            for aoa in internal_aoas:
+    try:
+        while True: # loop through the AoA sweep, and if we encounter a convergence failure at a desired AoA point, we will pause and ask the user if they want to retry that point or skip it. If they choose to retry, we will attempt to run that AoA point again immediately. If they choose to skip, we will move on to the next AoA point in the sweep. This allows the user to have control over how to handle convergence issues without crashing the entire program.
+            try:
+                for aoa in internal_aoas:
 
-                output = send_command(f"ALFA {aoa}")
+                    output = send_command(f"ALFA {aoa}")
 
-                if "VISCAL:  Convergence failed" in output:
-                    if any(abs(aoa - d) < 0.001 for d in desired_aoas_float):
-                        while True:
-                            try:
-                                choice = input(f"\nConvergence failed at AoA = {aoa}. Enter 'r' to retry, 's' to skip: ").strip().lower()
-                                if choice == "r":
-                                    output = send_command(f"ALFA {aoa}")
-                                    break
-                                elif choice == "s":
-                                    break
-                                else:
-                                    print("Please enter 'r' or 's'.")
-                            except KeyboardInterrupt:
-                                print("\n\nSweep paused.")
-                                while True:
-                                    choice = input("(c) Continue  (n) Skip to next Re  (q) Quit entire study: ").strip().lower()
-                                    if choice == "c":
+                    if "VISCAL:  Convergence failed" in output:
+                        if any(abs(aoa - d) < 0.001 for d in desired_aoas_float):
+                            while True:
+                                try:
+                                    choice = input(f"\nConvergence failed at AoA = {aoa}. Enter 'r' to retry, 's' to skip: ").strip().lower()
+                                    if choice == "r":
+                                        output = send_command(f"ALFA {aoa}")
                                         break
-                                    elif choice == "n":
-                                        break
-                                    elif choice == "q":
+                                    elif choice == "s":
                                         break
                                     else:
-                                        print("Please enter 'c', 'n', or 'q'.")
-                                if choice == "n" or choice == "q":
-                                    sweep_exit[0] = choice
-                                raise KeyboardInterrupt  # bubble up to outer handler
+                                        print("Please enter 'r' or 's'.")
+                                except KeyboardInterrupt:
+                                    print("\n\nSweep paused.")
+                                    while True:
+                                        choice = input("(c) Continue  (n) Skip to next Re  (q) Quit entire study: ").strip().lower()
+                                        if choice == "c":
+                                            break
+                                        elif choice == "n":
+                                            break
+                                        elif choice == "q":
+                                            break
+                                        else:
+                                            print("Please enter 'c', 'n', or 'q'.")
+                                    if choice == "n" or choice == "q":
+                                        sweep_exit[0] = choice
+                                    raise KeyboardInterrupt  # bubble up to outer handler
 
-                # tolerance check instead of exact match — same reason as parse_pacc
-                if any(abs(aoa - d) < 0.001 for d in desired_aoas_float):
-                    cpwr_path_i = os.path.join(tmpdir, f"cpwr_{aoa}.txt")
-                    send_command(f"CPWR {cpwr_path_i}")
-                    cpwr_paths[aoa] = cpwr_path_i
+                    # tolerance check instead of exact match — same reason as parse_pacc
+                    if any(abs(aoa - d) < 0.001 for d in desired_aoas_float):
+                        cpwr_path_i = os.path.join(tmpdir, f"cpwr_{aoa}.txt")
+                        send_command(f"CPWR {cpwr_path_i}")
+                        cpwr_paths[aoa] = cpwr_path_i
 
-            break  # loop finished naturally, exit while True
+                break  # loop finished naturally, exit while True
 
-        except KeyboardInterrupt:
-            print("\n\nSweep paused.")
-            while True:
-                choice = input("(c) Continue  (n) Skip to next Re  (q) Quit entire study: ").strip().lower()
-                if choice == "c":
+            except KeyboardInterrupt:
+                print("\n\nSweep paused.")
+                while True:
+                    choice = input("(c) Continue  (n) Skip to next Re  (q) Quit entire study: ").strip().lower()
+                    if choice == "c":
+                        break
+                    elif choice == "n":
+                        break
+                    elif choice == "q":
+                        break
+                    else:
+                        print("Please enter 'c', 'n', or 'q'.")
+                if choice == "n" or choice == "q":
+                    sweep_exit[0] = choice
                     break
-                elif choice == "n":
-                    break
-                elif choice == "q":
-                    break
-                else:
-                    print("Please enter 'c', 'n', or 'q'.")
-            if choice == "n" or choice == "q":
-                sweep_exit[0] = choice
-                break
 
-    send_command("PACC")
+    except (TimeoutError, XFOILNaNError) as e:
+        # XFOIL stopped responding mid-sweep — parse whatever it managed to write
+        # to the PACC file so we don't lose points that already converged
+        print(f"\nXFOIL stopped responding mid-sweep: {e}")
+        print("Returning partial results up to this point.")
+        sweep_exit[0] = "timeout"
+
+    try:
+        send_command("PACC")
+    except (TimeoutError, XFOILNaNError):
+        pass  # if XFOIL is gone, skip the close — what's on disk is still valid
+
     results = parse_pacc(pacc_path, desired_aoas, flow_type)
     return results, coord_path, desired_aoas, sweep_exit[0]
 
